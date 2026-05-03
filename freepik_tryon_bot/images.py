@@ -14,6 +14,15 @@ ASSET_PACKAGE = "freepik_tryon_bot.assets"
 MANNEQUIN_ASSETS: tuple[str, ...] = ("mannequin_1.jpg", "mannequin_2.jpg")
 HANGER_ASSETS: tuple[str, ...] = ("hanger_1.jpg", "hanger_2.jpg")
 
+
+def mask_filename(asset_name: str) -> str:
+    """Return the bundled mask filename for a master asset.
+
+    e.g. ``mannequin_1.jpg`` -> ``mannequin_1_mask.png``.
+    """
+    stem = asset_name.rsplit(".", 1)[0]
+    return f"{stem}_mask.png"
+
 # Per-master framing descriptors — fed into the prompt as part of
 # Reference 1's annotation so the model knows exactly what crop/zoom of the
 # scene to preserve. CRITICAL: keep these descriptions accurate to each
@@ -108,6 +117,20 @@ def parse_ratio(ratio: str) -> float:
     return a / b
 
 
+def _center_crop_box(w: int, h: int, target: float) -> tuple[int, int, int, int]:
+    """Return the (x0, y0, x1, y1) box for a center crop matching ``target``."""
+    current = w / h
+    if abs(current - target) < 0.005:
+        return 0, 0, w, h
+    if current > target:
+        new_w = max(1, int(round(h * target)))
+        x0 = (w - new_w) // 2
+        return x0, 0, x0 + new_w, h
+    new_h = max(1, int(round(w / target)))
+    y0 = (h - new_h) // 2
+    return 0, y0, w, y0 + new_h
+
+
 def crop_to_aspect_ratio(
     data: bytes,
     ratio: str,
@@ -124,23 +147,52 @@ def crop_to_aspect_ratio(
     target = parse_ratio(ratio)
     with Image.open(io.BytesIO(data)) as im:
         im = im.convert("RGB")
-        w, h = im.size
-        current = w / h
-        if abs(current - target) >= 0.005:
-            if current > target:
-                # too wide -> trim sides
-                new_w = max(1, int(round(h * target)))
-                x0 = (w - new_w) // 2
-                im = im.crop((x0, 0, x0 + new_w, h))
-            else:
-                # too tall -> trim top/bottom
-                new_h = max(1, int(round(w / target)))
-                y0 = (h - new_h) // 2
-                im = im.crop((0, y0, w, y0 + new_h))
+        box = _center_crop_box(im.width, im.height, target)
+        if box != (0, 0, im.width, im.height):
+            im = im.crop(box)
         im.thumbnail((max_side, max_side), Image.LANCZOS)
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=quality, optimize=True)
         return buf.getvalue()
+
+
+def crop_pair_to_aspect_ratio(
+    image_data: bytes,
+    mask_data: bytes,
+    ratio: str,
+    *,
+    max_side: int = MAX_REFERENCE_SIDE,
+    image_quality: int = 92,
+) -> tuple[bytes, bytes]:
+    """Center-crop both image and mask identically to ``ratio``.
+
+    Used by the inpainting flow so that the master scene and its mask stay
+    pixel-aligned after cropping. The mask is preserved as PNG (lossless)
+    while the image is re-encoded as JPEG.
+    """
+    target = parse_ratio(ratio)
+    with Image.open(io.BytesIO(image_data)) as im_in, Image.open(
+        io.BytesIO(mask_data)
+    ) as mk_in:
+        if (im_in.width, im_in.height) != (mk_in.width, mk_in.height):
+            mk_in = mk_in.resize((im_in.width, im_in.height), Image.NEAREST)
+        box = _center_crop_box(im_in.width, im_in.height, target)
+        im = im_in.convert("RGB")
+        mk = mk_in.convert("L")
+        if box != (0, 0, im.width, im.height):
+            im = im.crop(box)
+            mk = mk.crop(box)
+        # Resize together so they stay aligned.
+        if max(im.width, im.height) > max_side:
+            scale = max_side / max(im.width, im.height)
+            new_size = (max(1, int(im.width * scale)), max(1, int(im.height * scale)))
+            im = im.resize(new_size, Image.LANCZOS)
+            mk = mk.resize(new_size, Image.LANCZOS)
+        img_buf = io.BytesIO()
+        im.save(img_buf, format="JPEG", quality=image_quality, optimize=True)
+        msk_buf = io.BytesIO()
+        mk.save(msk_buf, format="PNG", optimize=True)
+        return img_buf.getvalue(), msk_buf.getvalue()
 
 
 def build_outfit_collage(

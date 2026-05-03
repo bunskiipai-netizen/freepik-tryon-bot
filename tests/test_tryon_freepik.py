@@ -1,4 +1,4 @@
-"""Tests for the Nano Banana Pro async client (mocked HTTP)."""
+"""Tests for the Freepik async client (mocked HTTP)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pytest
 import respx
 
 from freepik_tryon_bot.freepik import (
+    IDEOGRAM_EDIT_PATH,
     AuthError,
     FreepikImageClient,
     QuotaError,
@@ -16,6 +17,7 @@ from freepik_tryon_bot.freepik import (
 
 BASE = "https://api.freepik.com"
 PATH = "/v1/ai/text-to-image/nano-banana-pro"
+EDIT = IDEOGRAM_EDIT_PATH
 
 
 @pytest.fixture()
@@ -109,3 +111,54 @@ async def test_wait_for_task_failed_raises(client: FreepikImageClient) -> None:
 
     with pytest.raises(GenerationError):
         await client.wait_for_task("tid", poll_interval=0.0)
+
+
+@respx.mock
+async def test_create_inpaint_task_returns_id(client: FreepikImageClient) -> None:
+    route = respx.post(f"{BASE}{EDIT}").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"task_id": "edit-tid", "status": "CREATED"}}
+        )
+    )
+    tid = await client.create_inpaint_task(
+        image_b64="IMG", mask_b64="MSK", prompt="replace dress",
+        style_reference_images_b64=["REF"],
+    )
+    assert tid == "edit-tid"
+    assert route.called
+    sent = route.calls[0].request.content
+    assert b'"image":"IMG"' in sent
+    assert b'"mask":"MSK"' in sent
+    assert b'"prompt":"replace dress"' in sent
+    assert b'"style_reference_images":["REF"]' in sent
+    assert b'"rendering_speed":"DEFAULT"' in sent
+    assert b'"magic_prompt":"OFF"' in sent
+
+
+@respx.mock
+async def test_create_inpaint_task_auth_error(client: FreepikImageClient) -> None:
+    respx.post(f"{BASE}{EDIT}").mock(return_value=httpx.Response(403, text="nope"))
+    with pytest.raises(AuthError):
+        await client.create_inpaint_task(
+            image_b64="i", mask_b64="m", prompt="p"
+        )
+
+
+@respx.mock
+async def test_wait_for_task_uses_custom_path(client: FreepikImageClient) -> None:
+    respx.get(f"{BASE}{EDIT}/tid").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "task_id": "tid",
+                    "status": "COMPLETED",
+                    "generated": ["https://cdn.example.com/edit.png"],
+                }
+            },
+        )
+    )
+    result = await client.wait_for_task(
+        "tid", path=EDIT, poll_interval=0.0
+    )
+    assert result.image_urls == ["https://cdn.example.com/edit.png"]

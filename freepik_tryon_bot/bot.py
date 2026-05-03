@@ -29,19 +29,19 @@ from telegram.ext import (
 
 from .apikey_pool import APIKeyPool
 from .config import Config
-from .freepik import GenerationError, ReferenceImage
-from .generator import Generator
+from .freepik import GenerationError
+from .generator import Generator, InpaintTaskInput
 from .images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
-    MASTER_FRAMING,
     build_outfit_collage,
-    crop_to_aspect_ratio,
+    crop_pair_to_aspect_ratio,
     encode_b64,
     load_asset_bytes,
+    mask_filename,
     to_jpeg_bytes,
 )
-from .prompts import MANNEQUIN_PROMPT, hanger_prompt
+from .prompts import hanger_prompt, mannequin_prompt
 from .storage import Storage, UserRecord
 
 logger = logging.getLogger(__name__)
@@ -528,74 +528,46 @@ class TryonBot:
         await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
         progress_msg = await message.reply_text("⏳ Memulai generate… 0%")
 
-        # Build references
+        # Build per-task inpainting inputs (image + mask + style references).
         outfits = sess.outfits or []
         aspect_ratio = sess.aspect_ratio or self._cfg.aspect_ratio
         if sess.feature == "mannequin":
             assets = MANNEQUIN_ASSETS
-            outfit_jpg = outfits[0]
-            outfit_b64 = encode_b64(outfit_jpg)
-            prompt = MANNEQUIN_PROMPT
-            reference_groups: list[list[ReferenceImage]] = [
-                [
-                    ReferenceImage(
-                        encode_b64(
-                            crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
-                        ),
-                        text=(
-                            "Reference 1: MASTER mannequin scene (cropped to "
-                            f"{aspect_ratio}). The OUTPUT FRAMING must come "
-                            "from THIS reference, NOT from the outfit/garment "
-                            "reference. " + MASTER_FRAMING.get(asset, "")
-                        ),
-                        mime_type="image/jpeg",
-                    ),
-                    ReferenceImage(
-                        outfit_b64,
-                        text=(
-                            "Reference 2: target garment. Use ONLY for "
-                            "garment colour/fabric/pattern/cut. IGNORE the "
-                            "framing, background, and lighting of this "
-                            "reference."
-                        ),
-                        mime_type="image/jpeg",
-                    ),
-                ]
-                for asset in assets
-            ]
+            style_b64s = [encode_b64(outfits[0])]
+            inpaint_tasks: list[InpaintTaskInput] = []
+            for asset in assets:
+                master_bytes = load_asset_bytes(asset)
+                mask_bytes = load_asset_bytes(mask_filename(asset))
+                cropped_img, cropped_mask = crop_pair_to_aspect_ratio(
+                    master_bytes, mask_bytes, aspect_ratio
+                )
+                inpaint_tasks.append(
+                    InpaintTaskInput(
+                        image_b64=encode_b64(cropped_img),
+                        mask_b64=encode_b64(cropped_mask),
+                        prompt=mannequin_prompt(asset),
+                        style_reference_images_b64=style_b64s,
+                    )
+                )
         elif sess.feature == "hanger":
             assets = HANGER_ASSETS
             collage = build_outfit_collage(outfits)
-            collage_b64 = encode_b64(collage)
-            prompt = hanger_prompt(len(outfits))
-            reference_groups = [
-                [
-                    ReferenceImage(
-                        encode_b64(
-                            crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
-                        ),
-                        text=(
-                            "Reference 1: MASTER rack scene (cropped to "
-                            f"{aspect_ratio}). The OUTPUT FRAMING must come "
-                            "from THIS reference, NOT from the garments "
-                            "strip. " + MASTER_FRAMING.get(asset, "")
-                        ),
-                        mime_type="image/jpeg",
-                    ),
-                    ReferenceImage(
-                        collage_b64,
-                        text=(
-                            f"Reference 2: strip of {len(outfits)} garments, "
-                            "left to right, in order. Use ONLY for garment "
-                            "colour/fabric/pattern/cut. IGNORE the strip's "
-                            "background and framing — copy ONLY the "
-                            "garments themselves onto the master rack."
-                        ),
-                        mime_type="image/jpeg",
-                    ),
-                ]
-                for asset in assets
-            ]
+            style_b64s = [encode_b64(collage)]
+            inpaint_tasks = []
+            for asset in assets:
+                master_bytes = load_asset_bytes(asset)
+                mask_bytes = load_asset_bytes(mask_filename(asset))
+                cropped_img, cropped_mask = crop_pair_to_aspect_ratio(
+                    master_bytes, mask_bytes, aspect_ratio
+                )
+                inpaint_tasks.append(
+                    InpaintTaskInput(
+                        image_b64=encode_b64(cropped_img),
+                        mask_b64=encode_b64(cropped_mask),
+                        prompt=hanger_prompt(asset, len(outfits)),
+                        style_reference_images_b64=style_b64s,
+                    )
+                )
         else:
             await message.reply_text("State error. Mulai ulang dengan /menu.")
             clear_session(context)
@@ -615,11 +587,8 @@ class TryonBot:
                 await progress_msg.edit_text(text)
 
         try:
-            result = await self._generator.run_batch(
-                prompt=prompt,
-                reference_groups=reference_groups,
-                aspect_ratio=aspect_ratio,
-                resolution=self._cfg.resolution,
+            result = await self._generator.run_inpaint_batch(
+                tasks=inpaint_tasks,
                 on_progress=on_progress,
             )
         except GenerationError as exc:

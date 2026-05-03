@@ -1,7 +1,13 @@
-"""Async client untuk Nano Banana Pro (text+reference -> image).
+"""Async client untuk Freepik image generation / inpainting endpoints.
 
-Endpoint: ``POST /v1/ai/text-to-image/nano-banana-pro``
-Polling: ``GET /v1/ai/text-to-image/nano-banana-pro/{task_id}``
+Supported endpoints:
+
+- ``POST /v1/ai/text-to-image/nano-banana-pro`` — text + reference image
+  generation (legacy / kept for backward compatibility).
+- ``POST /v1/ai/ideogram-image-edit`` — masked inpainting where black
+  regions of the mask are replaced and white regions are preserved.
+  This is the workflow used by the bot to keep the master scene's
+  framing pixel-accurate.
 
 The client itself only knows about one API key per instance — rotation is
 handled by the orchestration layer (`generator.py`) which leases a key from
@@ -22,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.freepik.com"
 NANO_BANANA_PRO_PATH = "/v1/ai/text-to-image/nano-banana-pro"
+IDEOGRAM_EDIT_PATH = "/v1/ai/ideogram-image-edit"
 
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELED", "CANCELLED", "ERROR"}
 SUCCESS_STATUS = "COMPLETED"
@@ -186,8 +193,50 @@ class FreepikImageClient:
             raise GenerationError(f"Tidak ada task_id pada response: {data}")
         return task_id
 
-    async def get_task(self, task_id: str) -> dict[str, Any]:
-        url = f"{self._base_url}{NANO_BANANA_PRO_PATH}/{task_id}"
+    async def create_inpaint_task(
+        self,
+        *,
+        image_b64: str,
+        mask_b64: str,
+        prompt: str,
+        style_reference_images_b64: list[str] | None = None,
+        rendering_speed: str = "DEFAULT",
+        magic_prompt: str = "OFF",
+    ) -> str:
+        """Submit a masked inpainting task to the Ideogram edit endpoint.
+
+        ``image_b64`` is the base64-encoded master scene, ``mask_b64`` is
+        the same-size mask where BLACK pixels mark regions to regenerate
+        and WHITE pixels mark regions to preserve. The output retains the
+        master's exact dimensions and composition; only the black region
+        is repainted.
+        """
+        url = f"{self._base_url}{IDEOGRAM_EDIT_PATH}"
+        body: dict[str, Any] = {
+            "image": image_b64,
+            "mask": mask_b64,
+            "prompt": prompt,
+            "rendering_speed": rendering_speed,
+            "magic_prompt": magic_prompt,
+        }
+        if style_reference_images_b64:
+            body["style_reference_images"] = list(style_reference_images_b64)
+        try:
+            resp = await self._client.post(url, json=body)
+        except httpx.HTTPError as exc:
+            raise TransientError(f"Network error: {exc}") from exc
+        if resp.status_code >= 400:
+            raise _classify_http_error(resp.status_code, resp.text)
+        data = resp.json()
+        task_id = (data.get("data") or {}).get("task_id")
+        if not isinstance(task_id, str):
+            raise GenerationError(f"Tidak ada task_id pada response: {data}")
+        return task_id
+
+    async def get_task(
+        self, task_id: str, *, path: str = NANO_BANANA_PRO_PATH
+    ) -> dict[str, Any]:
+        url = f"{self._base_url}{path}/{task_id}"
         try:
             resp = await self._client.get(url)
         except httpx.HTTPError as exc:
@@ -200,6 +249,7 @@ class FreepikImageClient:
         self,
         task_id: str,
         *,
+        path: str = NANO_BANANA_PRO_PATH,
         poll_interval: float = 4.0,
         timeout: float = 600.0,  # noqa: ASYNC109 - upstream API exposes timeout knob
         on_progress: Callable[[str, float | None], Awaitable[None]] | None = None,
@@ -207,7 +257,7 @@ class FreepikImageClient:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
         while True:
-            payload = await self.get_task(task_id)
+            payload = await self.get_task(task_id, path=path)
             status = _extract_status(payload)
             progress = _extract_progress(payload)
             if on_progress is not None:

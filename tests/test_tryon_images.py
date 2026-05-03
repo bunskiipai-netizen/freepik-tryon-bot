@@ -12,9 +12,11 @@ from freepik_tryon_bot.images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
     build_outfit_collage,
+    crop_pair_to_aspect_ratio,
     crop_to_aspect_ratio,
     encode_b64,
     load_asset_bytes,
+    mask_filename,
     parse_ratio,
     to_jpeg_bytes,
 )
@@ -100,3 +102,45 @@ def test_crop_to_aspect_ratio_already_matches() -> None:
     out = crop_to_aspect_ratio(raw, "1:1")
     with Image.open(io.BytesIO(out)) as im:
         assert abs(im.size[0] / im.size[1] - 1.0) < 0.01
+
+
+def test_mask_filename_helper() -> None:
+    assert mask_filename("mannequin_1.jpg") == "mannequin_1_mask.png"
+    assert mask_filename("hanger_2.jpg") == "hanger_2_mask.png"
+
+
+def _png_mask_bytes(size: tuple[int, int]) -> bytes:
+    im = Image.new("L", size, 255)
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("ratio", ["1:1", "3:4", "4:3", "16:9", "9:16"])
+def test_crop_pair_to_aspect_ratio_keeps_alignment(ratio: str) -> None:
+    img = _png_bytes((900, 1200))  # 3:4
+    mask = _png_mask_bytes((900, 1200))
+    img_out, mask_out = crop_pair_to_aspect_ratio(img, mask, ratio)
+    with Image.open(io.BytesIO(img_out)) as im, Image.open(io.BytesIO(mask_out)) as mk:
+        assert im.size == mk.size
+        target = parse_ratio(ratio)
+        actual = im.size[0] / im.size[1]
+        assert abs(actual - target) < 0.05
+        assert mk.mode == "L"
+
+
+def test_crop_pair_resizes_mask_to_image_size() -> None:
+    img = _png_bytes((600, 800))
+    mask = _png_mask_bytes((300, 400))  # half-resolution mask
+    img_out, mask_out = crop_pair_to_aspect_ratio(img, mask, "3:4")
+    with Image.open(io.BytesIO(img_out)) as im, Image.open(io.BytesIO(mask_out)) as mk:
+        assert im.size == mk.size
+
+
+def test_bundled_masks_present() -> None:
+    """Each master must ship with a matching mask of the same dimensions."""
+    for name in (*MANNEQUIN_ASSETS, *HANGER_ASSETS):
+        master = load_asset_bytes(name)
+        mask = load_asset_bytes(mask_filename(name))
+        with Image.open(io.BytesIO(master)) as im, Image.open(io.BytesIO(mask)) as mk:
+            assert im.size == mk.size, f"{name} mask size mismatch: {im.size} vs {mk.size}"
