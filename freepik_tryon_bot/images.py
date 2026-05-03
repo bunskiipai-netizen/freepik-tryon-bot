@@ -14,6 +14,59 @@ ASSET_PACKAGE = "freepik_tryon_bot.assets"
 MANNEQUIN_ASSETS: tuple[str, ...] = ("mannequin_1.jpg", "mannequin_2.jpg")
 HANGER_ASSETS: tuple[str, ...] = ("hanger_1.jpg", "hanger_2.jpg")
 
+# Per-master framing descriptors — fed into the prompt as part of
+# Reference 1's annotation so the model knows exactly what crop/zoom of the
+# scene to preserve. CRITICAL: keep these descriptions accurate to each
+# bundled image, otherwise the model will drift.
+MASTER_FRAMING: dict[str, str] = {
+    "mannequin_1.jpg": (
+        "TIGHT CLOSE-UP. The frame shows the mannequin's UPPER BODY ONLY: "
+        "from the top of the headless mannequin form down to roughly mid-"
+        "thigh / knee level. The mannequin's hands are visible but the "
+        "feet, base, and floor are NOT visible. The standing mirror behind "
+        "the mannequin is partially visible on the LEFT, showing the BACK "
+        "of the garment from the same close-up region. A side table with "
+        "pampas grass / dried plant in a vase is partially visible on the "
+        "RIGHT. White wood-paneled wall behind. Soft daylight from upper "
+        "right. The output MUST keep this exact close-up framing — do "
+        "NOT extend the frame to show the floor, the mannequin's base, or "
+        "the dress hem near the floor. Do NOT zoom out."
+    ),
+    "mannequin_2.jpg": (
+        "WIDE FULL-BODY shot. The frame shows the entire mannequin from "
+        "the top of the head fixture all the way down to the floor where "
+        "the dress hem rests. Significant headroom above the mannequin. "
+        "The standing mirror is fully visible on the LEFT, showing the "
+        "BACK of the full-length garment. A round side table with a vase "
+        "of dried plants is on the RIGHT. White wood-paneled wall behind. "
+        "Soft daylight. The output MUST keep this full-body framing with "
+        "the mannequin centered and the entire dress visible from collar "
+        "to floor."
+    ),
+    "hanger_1.jpg": (
+        "WIDE SHOT of a horizontal hanging rack. The frame shows the full "
+        "length of FOUR dresses hanging from wooden hangers on a single "
+        "horizontal pole at the TOP of the frame. The dresses extend "
+        "vertically from the hangers down to roughly the bottom of the "
+        "frame. Soft beige / warm peach wall behind, with a faint plant-"
+        "leaf shadow on the LEFT wall from natural sunlight upper-left. "
+        "Significant negative space on the LEFT side of the rack and "
+        "smaller negative space on the right. The output MUST keep this "
+        "wide framing showing complete dresses from hanger to hem."
+    ),
+    "hanger_2.jpg": (
+        "TIGHT CLOSE-UP of dresses hanging on a rack. The frame shows "
+        "only the UPPER TORSO portion of FOUR dresses (collar, button "
+        "placket, upper sleeves, top of the bodice) — roughly the top "
+        "third of each dress. The wooden hangers and the white horizontal "
+        "rack pole are visible at the very top. The dress hems and "
+        "lower bodies are NOT visible (cut off below). Soft beige wall "
+        "behind. The output MUST keep this exact close-up framing — do "
+        "NOT extend the frame downward to show full dresses, do NOT zoom "
+        "out, do NOT show the floor or full hems."
+    ),
+}
+
 MAX_REFERENCE_SIDE = 1280
 COLLAGE_TARGET_HEIGHT = 1024
 COLLAGE_BG = (250, 248, 244)

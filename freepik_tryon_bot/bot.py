@@ -34,6 +34,7 @@ from .generator import Generator
 from .images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
+    MASTER_FRAMING,
     build_outfit_collage,
     crop_to_aspect_ratio,
     encode_b64,
@@ -542,16 +543,21 @@ class TryonBot:
                             crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
                         ),
                         text=(
-                            "Reference 1: master mannequin scene cropped to "
-                            f"{aspect_ratio}. Output must match this exact "
-                            "framing, scene, and composition pixel-for-pixel "
-                            "(only the garment changes)."
+                            "Reference 1: MASTER mannequin scene (cropped to "
+                            f"{aspect_ratio}). The OUTPUT FRAMING must come "
+                            "from THIS reference, NOT from the outfit/garment "
+                            "reference. " + MASTER_FRAMING.get(asset, "")
                         ),
                         mime_type="image/jpeg",
                     ),
                     ReferenceImage(
                         outfit_b64,
-                        text="Reference 2: target garment to wear",
+                        text=(
+                            "Reference 2: target garment. Use ONLY for "
+                            "garment colour/fabric/pattern/cut. IGNORE the "
+                            "framing, background, and lighting of this "
+                            "reference."
+                        ),
                         mime_type="image/jpeg",
                     ),
                 ]
@@ -569,10 +575,10 @@ class TryonBot:
                             crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
                         ),
                         text=(
-                            "Reference 1: master rack scene cropped to "
-                            f"{aspect_ratio}. Output must match this exact "
-                            "framing, scene, and composition pixel-for-pixel "
-                            "(only the hanging garments change)."
+                            "Reference 1: MASTER rack scene (cropped to "
+                            f"{aspect_ratio}). The OUTPUT FRAMING must come "
+                            "from THIS reference, NOT from the garments "
+                            "strip. " + MASTER_FRAMING.get(asset, "")
                         ),
                         mime_type="image/jpeg",
                     ),
@@ -580,7 +586,10 @@ class TryonBot:
                         collage_b64,
                         text=(
                             f"Reference 2: strip of {len(outfits)} garments, "
-                            "left to right, in order"
+                            "left to right, in order. Use ONLY for garment "
+                            "colour/fabric/pattern/cut. IGNORE the strip's "
+                            "background and framing — copy ONLY the "
+                            "garments themselves onto the master rack."
                         ),
                         mime_type="image/jpeg",
                     ),
