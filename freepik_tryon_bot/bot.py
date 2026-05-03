@@ -53,6 +53,9 @@ CB_BALANCE = "menu:balance"
 CB_HELP = "menu:help"
 CB_CANCEL = "flow:cancel"
 CB_HANGER_COUNT_PREFIX = "hcnt:"
+CB_RATIO_PREFIX = "ratio:"
+
+SUPPORTED_RATIOS: tuple[str, ...] = ("1:1", "3:4", "4:3", "16:9", "9:16")
 
 
 # ---- session state -------------------------------------------------------
@@ -63,6 +66,7 @@ class Session:
     """In-memory per-user flow state."""
 
     feature: str | None = None  # "mannequin" | "hanger"
+    aspect_ratio: str | None = None  # one of SUPPORTED_RATIOS
     expected_outfits: int = 0
     outfits: list[bytes] | None = None  # raw JPG bytes after re-encoding
 
@@ -103,6 +107,22 @@ def hanger_count_markup() -> InlineKeyboardMarkup:
         for n in (1, 2, 3, 4, 5)
     ]
     return InlineKeyboardMarkup([row, [InlineKeyboardButton("✖️ Batal", callback_data=CB_CANCEL)]])
+
+
+def ratio_markup() -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton("1:1", callback_data=f"{CB_RATIO_PREFIX}1:1"),
+            InlineKeyboardButton("3:4", callback_data=f"{CB_RATIO_PREFIX}3:4"),
+            InlineKeyboardButton("4:3", callback_data=f"{CB_RATIO_PREFIX}4:3"),
+        ],
+        [
+            InlineKeyboardButton("16:9", callback_data=f"{CB_RATIO_PREFIX}16:9"),
+            InlineKeyboardButton("9:16", callback_data=f"{CB_RATIO_PREFIX}9:16"),
+        ],
+        [InlineKeyboardButton("✖️ Batal", callback_data=CB_CANCEL)],
+    ]
+    return InlineKeyboardMarkup(rows)
 
 
 def cancel_only_markup() -> InlineKeyboardMarkup:
@@ -179,11 +199,12 @@ class TryonBot:
             (
                 "<b>Cara pakai</b>\n\n"
                 "1. Pilih <b>Mannequin Tryon</b> atau <b>Hanger</b> dari menu utama.\n"
-                "2. <b>Mannequin Tryon</b>: kirim 1 foto outfit (baju yang ingin "
+                "2. Pilih <b>rasio output</b> (1:1, 3:4, 4:3, 16:9, 9:16).\n"
+                "3. <b>Mannequin Tryon</b>: kirim 1 foto outfit (baju yang ingin "
                 "dipakai mannequin).\n"
-                "3. <b>Hanger</b>: pilih jumlah outfit (1–5), lalu kirim foto outfit "
+                "4. <b>Hanger</b>: pilih jumlah outfit (1–5), lalu kirim foto outfit "
                 "satu per satu sesuai urutan kiri-ke-kanan.\n"
-                "4. Tunggu progress generate, lalu Anda terima 2 gambar hasil.\n\n"
+                "5. Tunggu progress generate, lalu Anda terima 2 gambar hasil.\n\n"
                 "<b>Catatan</b>:\n"
                 "• Format foto JPG/PNG, sisi terpanjang ≤ 4096 px.\n"
                 "• Latar belakang outfit polos atau flat-lay paling akurat.\n"
@@ -333,6 +354,11 @@ class TryonBot:
             except ValueError:
                 return
             await self._set_hanger_count(update, context, n)
+        elif data.startswith(CB_RATIO_PREFIX):
+            ratio = data[len(CB_RATIO_PREFIX):]
+            if ratio not in SUPPORTED_RATIOS:
+                return
+            await self._set_ratio(update, context, ratio)
         elif data == CB_BALANCE:
             await self.cmd_balance(update, context)
         elif data == CB_HELP:
@@ -346,27 +372,55 @@ class TryonBot:
         assert update.effective_message is not None
         sess = get_session(context)
         sess.feature = "mannequin"
-        sess.expected_outfits = 1
+        sess.aspect_ratio = None
+        sess.expected_outfits = 0
         sess.outfits = []
         await update.effective_message.reply_text(
-            "👗 <b>Mannequin Tryon</b>\n\n"
-            "Kirim <b>1 foto outfit</b> (pakaian) yang ingin dipakai mannequin. "
-            "Foto polos / flat-lay paling akurat.",
+            "👗 <b>Mannequin Tryon</b>\n\nPilih rasio output:",
             parse_mode=ParseMode.HTML,
-            reply_markup=cancel_only_markup(),
+            reply_markup=ratio_markup(),
         )
 
     async def _start_hanger(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         assert update.effective_message is not None
         sess = get_session(context)
         sess.feature = "hanger"
+        sess.aspect_ratio = None
         sess.expected_outfits = 0
         sess.outfits = []
         await update.effective_message.reply_text(
-            "🧥 <b>Hanger</b>\n\nPilih jumlah outfit yang akan digantung:",
+            "🧥 <b>Hanger</b>\n\nPilih rasio output:",
             parse_mode=ParseMode.HTML,
-            reply_markup=hanger_count_markup(),
+            reply_markup=ratio_markup(),
         )
+
+    async def _set_ratio(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, ratio: str
+    ) -> None:
+        assert update.effective_message is not None
+        sess = get_session(context)
+        if sess.feature is None:
+            await update.effective_message.reply_text(
+                "Pilih dulu fitur dari menu:", reply_markup=main_menu_markup()
+            )
+            return
+        sess.aspect_ratio = ratio
+        if sess.feature == "mannequin":
+            sess.expected_outfits = 1
+            sess.outfits = []
+            await update.effective_message.reply_text(
+                f"Rasio: <b>{ratio}</b>.\n\n"
+                "Kirim <b>1 foto outfit</b> yang ingin dipakai mannequin. "
+                "Foto polos / flat-lay paling akurat.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=cancel_only_markup(),
+            )
+        elif sess.feature == "hanger":
+            await update.effective_message.reply_text(
+                f"Rasio: <b>{ratio}</b>.\n\nPilih jumlah outfit yang akan digantung:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=hanger_count_markup(),
+            )
 
     async def _set_hanger_count(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, count: int
@@ -376,6 +430,11 @@ class TryonBot:
             return
         sess = get_session(context)
         if sess.feature != "hanger":
+            return
+        if sess.aspect_ratio is None:
+            await update.effective_message.reply_text(
+                "Pilih rasio dulu:", reply_markup=ratio_markup()
+            )
             return
         sess.expected_outfits = count
         sess.outfits = []
@@ -396,6 +455,12 @@ class TryonBot:
         if sess.feature is None or sess.expected_outfits == 0:
             await message.reply_text(
                 "Pilih dulu fitur dari menu:", reply_markup=main_menu_markup()
+            )
+            return
+
+        if sess.aspect_ratio is None:
+            await message.reply_text(
+                "Pilih rasio output dulu:", reply_markup=ratio_markup()
             )
             return
 
@@ -524,11 +589,12 @@ class TryonBot:
             with contextlib.suppress(Exception):
                 await progress_msg.edit_text(text)
 
+        aspect_ratio = sess.aspect_ratio or self._cfg.aspect_ratio
         try:
             result = await self._generator.run_batch(
                 prompt=prompt,
                 reference_groups=reference_groups,
-                aspect_ratio=self._cfg.aspect_ratio,
+                aspect_ratio=aspect_ratio,
                 resolution=self._cfg.resolution,
                 on_progress=on_progress,
             )
