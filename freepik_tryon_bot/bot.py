@@ -35,6 +35,7 @@ from .images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
     build_outfit_collage,
+    crop_to_aspect_ratio,
     encode_b64,
     load_asset_bytes,
     to_jpeg_bytes,
@@ -528,6 +529,7 @@ class TryonBot:
 
         # Build references
         outfits = sess.outfits or []
+        aspect_ratio = sess.aspect_ratio or self._cfg.aspect_ratio
         if sess.feature == "mannequin":
             assets = MANNEQUIN_ASSETS
             outfit_jpg = outfits[0]
@@ -536,8 +538,15 @@ class TryonBot:
             reference_groups: list[list[ReferenceImage]] = [
                 [
                     ReferenceImage(
-                        encode_b64(load_asset_bytes(asset)),
-                        text=("Reference 1: full mannequin scene — preserve everything"),
+                        encode_b64(
+                            crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
+                        ),
+                        text=(
+                            "Reference 1: master mannequin scene cropped to "
+                            f"{aspect_ratio}. Output must match this exact "
+                            "framing, scene, and composition pixel-for-pixel "
+                            "(only the garment changes)."
+                        ),
                         mime_type="image/jpeg",
                     ),
                     ReferenceImage(
@@ -556,8 +565,15 @@ class TryonBot:
             reference_groups = [
                 [
                     ReferenceImage(
-                        encode_b64(load_asset_bytes(asset)),
-                        text="Reference 1: master rack scene",
+                        encode_b64(
+                            crop_to_aspect_ratio(load_asset_bytes(asset), aspect_ratio)
+                        ),
+                        text=(
+                            "Reference 1: master rack scene cropped to "
+                            f"{aspect_ratio}. Output must match this exact "
+                            "framing, scene, and composition pixel-for-pixel "
+                            "(only the hanging garments change)."
+                        ),
                         mime_type="image/jpeg",
                     ),
                     ReferenceImage(
@@ -589,7 +605,6 @@ class TryonBot:
             with contextlib.suppress(Exception):
                 await progress_msg.edit_text(text)
 
-        aspect_ratio = sess.aspect_ratio or self._cfg.aspect_ratio
         try:
             result = await self._generator.run_batch(
                 prompt=prompt,

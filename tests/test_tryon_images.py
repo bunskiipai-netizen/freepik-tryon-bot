@@ -12,8 +12,10 @@ from freepik_tryon_bot.images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
     build_outfit_collage,
+    crop_to_aspect_ratio,
     encode_b64,
     load_asset_bytes,
+    parse_ratio,
     to_jpeg_bytes,
 )
 
@@ -66,3 +68,35 @@ def test_assets_present() -> None:
         assert len(data) > 0
         with Image.open(io.BytesIO(data)) as im:
             assert im.format == "JPEG"
+
+
+def test_parse_ratio_valid() -> None:
+    assert parse_ratio("1:1") == 1.0
+    assert parse_ratio("16:9") == pytest.approx(16 / 9)
+    assert parse_ratio("3:4") == 0.75
+
+
+def test_parse_ratio_invalid() -> None:
+    with pytest.raises(ValueError):
+        parse_ratio("16-9")
+    with pytest.raises(ValueError):
+        parse_ratio("0:1")
+
+
+@pytest.mark.parametrize("ratio", ["1:1", "3:4", "4:3", "16:9", "9:16"])
+def test_crop_to_aspect_ratio_close_to_target(ratio: str) -> None:
+    raw = _png_bytes((1000, 1500))  # 2:3 portrait
+    out = crop_to_aspect_ratio(raw, ratio)
+    with Image.open(io.BytesIO(out)) as im:
+        target = parse_ratio(ratio)
+        actual = im.size[0] / im.size[1]
+        assert abs(actual - target) < 0.05, (
+            f"ratio={ratio} expected~{target:.3f} got {actual:.3f}"
+        )
+
+
+def test_crop_to_aspect_ratio_already_matches() -> None:
+    raw = _png_bytes((400, 400))  # 1:1
+    out = crop_to_aspect_ratio(raw, "1:1")
+    with Image.open(io.BytesIO(out)) as im:
+        assert abs(im.size[0] / im.size[1] - 1.0) < 0.01

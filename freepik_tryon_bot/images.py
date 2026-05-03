@@ -44,6 +44,52 @@ def encode_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def parse_ratio(ratio: str) -> float:
+    """Parse a ratio string like '16:9' or '3:4' into a float."""
+    parts = ratio.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid ratio: {ratio!r}")
+    a, b = (int(p.strip()) for p in parts)
+    if a <= 0 or b <= 0:
+        raise ValueError(f"Invalid ratio: {ratio!r}")
+    return a / b
+
+
+def crop_to_aspect_ratio(
+    data: bytes,
+    ratio: str,
+    *,
+    max_side: int = MAX_REFERENCE_SIDE,
+    quality: int = 92,
+) -> bytes:
+    """Center-crop ``data`` to the requested aspect ratio, then resize+JPEG.
+
+    This keeps the original image's framing (zoom level on the subject) but
+    forces the canvas shape to match the selected output ratio so the
+    generation model sees a master in the same shape as the requested output.
+    """
+    target = parse_ratio(ratio)
+    with Image.open(io.BytesIO(data)) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        current = w / h
+        if abs(current - target) >= 0.005:
+            if current > target:
+                # too wide -> trim sides
+                new_w = max(1, int(round(h * target)))
+                x0 = (w - new_w) // 2
+                im = im.crop((x0, 0, x0 + new_w, h))
+            else:
+                # too tall -> trim top/bottom
+                new_h = max(1, int(round(w / target)))
+                y0 = (h - new_h) // 2
+                im = im.crop((0, y0, w, y0 + new_h))
+        im.thumbnail((max_side, max_side), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+
+
 def build_outfit_collage(
     outfits: list[bytes],
     *,
