@@ -8,6 +8,7 @@ import respx
 
 from freepik_tryon_bot.freepik import (
     IDEOGRAM_EDIT_PATH,
+    SEEDREAM_EDIT_PATH,
     AuthError,
     FreepikImageClient,
     QuotaError,
@@ -18,6 +19,7 @@ from freepik_tryon_bot.freepik import (
 BASE = "https://api.freepik.com"
 PATH = "/v1/ai/text-to-image/nano-banana-pro"
 EDIT = IDEOGRAM_EDIT_PATH
+SEED = SEEDREAM_EDIT_PATH
 
 
 @pytest.fixture()
@@ -162,3 +164,44 @@ async def test_wait_for_task_uses_custom_path(client: FreepikImageClient) -> Non
         "tid", path=EDIT, poll_interval=0.0
     )
     assert result.image_urls == ["https://cdn.example.com/edit.png"]
+
+
+@respx.mock
+async def test_create_seedream_edit_task_returns_id(client: FreepikImageClient) -> None:
+    route = respx.post(f"{BASE}{SEED}").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"task_id": "sd-tid", "status": "CREATED"}}
+        )
+    )
+    tid = await client.create_seedream_edit_task(
+        prompt="swap the dress",
+        reference_images_b64_or_url=["MASTER_B64", "OUTFIT_B64"],
+        aspect_ratio="traditional_3_4",
+    )
+    assert tid == "sd-tid"
+    sent = route.calls[0].request.content
+    assert b'"prompt":"swap the dress"' in sent
+    assert b'"reference_images":["MASTER_B64","OUTFIT_B64"]' in sent
+    assert b'"aspect_ratio":"traditional_3_4"' in sent
+
+
+@respx.mock
+async def test_create_seedream_edit_task_auth_error(client: FreepikImageClient) -> None:
+    respx.post(f"{BASE}{SEED}").mock(return_value=httpx.Response(401, text="nope"))
+    with pytest.raises(AuthError):
+        await client.create_seedream_edit_task(
+            prompt="x", reference_images_b64_or_url=["A"]
+        )
+
+
+async def test_create_seedream_edit_task_validates_ref_count(
+    client: FreepikImageClient,
+) -> None:
+    with pytest.raises(ValueError):
+        await client.create_seedream_edit_task(
+            prompt="x", reference_images_b64_or_url=[]
+        )
+    with pytest.raises(ValueError):
+        await client.create_seedream_edit_task(
+            prompt="x", reference_images_b64_or_url=["a"] * 6
+        )

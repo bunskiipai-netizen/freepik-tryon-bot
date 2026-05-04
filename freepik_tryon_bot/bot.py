@@ -30,16 +30,15 @@ from telegram.ext import (
 from .apikey_pool import APIKeyPool
 from .config import Config
 from .freepik import GenerationError
-from .generator import Generator, InpaintTaskInput
+from .generator import Generator, SeedreamTaskInput
 from .images import (
     HANGER_ASSETS,
     MANNEQUIN_ASSETS,
-    build_outfit_collage,
-    crop_pair_to_aspect_ratio,
+    crop_to_aspect_ratio,
     encode_b64,
     load_asset_bytes,
-    mask_filename,
     to_jpeg_bytes,
+    to_seedream_ratio,
 )
 from .prompts import hanger_prompt, mannequin_prompt
 from .storage import Storage, UserRecord
@@ -528,44 +527,42 @@ class TryonBot:
         await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
         progress_msg = await message.reply_text("⏳ Memulai generate… 0%")
 
-        # Build per-task inpainting inputs (image + mask + style references).
+        # Build per-task Seedream 4.5 Edit inputs (master + outfit references).
         outfits = sess.outfits or []
         aspect_ratio = sess.aspect_ratio or self._cfg.aspect_ratio
+        seedream_ratio = to_seedream_ratio(aspect_ratio)
+        seedream_tasks: list[SeedreamTaskInput] = []
         if sess.feature == "mannequin":
-            assets = MANNEQUIN_ASSETS
-            style_b64s = [encode_b64(outfits[0])]
-            inpaint_tasks: list[InpaintTaskInput] = []
-            for asset in assets:
+            outfit_b64 = encode_b64(outfits[0])
+            for asset in MANNEQUIN_ASSETS:
                 master_bytes = load_asset_bytes(asset)
-                mask_bytes = load_asset_bytes(mask_filename(asset))
-                cropped_img, cropped_mask = crop_pair_to_aspect_ratio(
-                    master_bytes, mask_bytes, aspect_ratio
-                )
-                inpaint_tasks.append(
-                    InpaintTaskInput(
-                        image_b64=encode_b64(cropped_img),
-                        mask_b64=encode_b64(cropped_mask),
+                cropped_master = crop_to_aspect_ratio(master_bytes, aspect_ratio)
+                seedream_tasks.append(
+                    SeedreamTaskInput(
+                        reference_images_b64=[
+                            encode_b64(cropped_master),
+                            outfit_b64,
+                        ],
                         prompt=mannequin_prompt(asset),
-                        style_reference_images_b64=style_b64s,
+                        aspect_ratio=seedream_ratio,
                     )
                 )
         elif sess.feature == "hanger":
-            assets = HANGER_ASSETS
-            collage = build_outfit_collage(outfits)
-            style_b64s = [encode_b64(collage)]
-            inpaint_tasks = []
-            for asset in assets:
+            single = len(outfits) == 1
+            outfit_b64s = [encode_b64(o) for o in outfits]
+            for asset in HANGER_ASSETS:
                 master_bytes = load_asset_bytes(asset)
-                mask_bytes = load_asset_bytes(mask_filename(asset))
-                cropped_img, cropped_mask = crop_pair_to_aspect_ratio(
-                    master_bytes, mask_bytes, aspect_ratio
-                )
-                inpaint_tasks.append(
-                    InpaintTaskInput(
-                        image_b64=encode_b64(cropped_img),
-                        mask_b64=encode_b64(cropped_mask),
-                        prompt=hanger_prompt(asset, len(outfits)),
-                        style_reference_images_b64=style_b64s,
+                cropped_master = crop_to_aspect_ratio(master_bytes, aspect_ratio)
+                seedream_tasks.append(
+                    SeedreamTaskInput(
+                        reference_images_b64=[
+                            encode_b64(cropped_master),
+                            *outfit_b64s,
+                        ],
+                        prompt=hanger_prompt(
+                            asset, len(outfits), single_outfit=single
+                        ),
+                        aspect_ratio=seedream_ratio,
                     )
                 )
         else:
@@ -587,8 +584,8 @@ class TryonBot:
                 await progress_msg.edit_text(text)
 
         try:
-            result = await self._generator.run_inpaint_batch(
-                tasks=inpaint_tasks,
+            result = await self._generator.run_seedream_batch(
+                tasks=seedream_tasks,
                 on_progress=on_progress,
             )
         except GenerationError as exc:

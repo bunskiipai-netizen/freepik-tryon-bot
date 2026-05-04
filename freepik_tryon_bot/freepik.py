@@ -1,13 +1,17 @@
-"""Async client untuk Freepik image generation / inpainting endpoints.
+"""Async client untuk Freepik image generation / editing endpoints.
 
 Supported endpoints:
 
+- ``POST /v1/ai/text-to-image/seedream-v4-5-edit`` — image-to-image
+  editing with up to 5 reference images. The model preserves subject
+  details, lighting, and color tone of reference image #1 while editing
+  according to the prompt + additional reference images. This is the
+  workflow used by the bot to swap the outfit on a mannequin/hanger
+  master while preserving the rest of the scene.
 - ``POST /v1/ai/text-to-image/nano-banana-pro`` — text + reference image
   generation (legacy / kept for backward compatibility).
-- ``POST /v1/ai/ideogram-image-edit`` — masked inpainting where black
-  regions of the mask are replaced and white regions are preserved.
-  This is the workflow used by the bot to keep the master scene's
-  framing pixel-accurate.
+- ``POST /v1/ai/ideogram-image-edit`` — masked inpainting (legacy /
+  kept for backward compatibility).
 
 The client itself only knows about one API key per instance — rotation is
 handled by the orchestration layer (`generator.py`) which leases a key from
@@ -29,6 +33,7 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.freepik.com"
 NANO_BANANA_PRO_PATH = "/v1/ai/text-to-image/nano-banana-pro"
 IDEOGRAM_EDIT_PATH = "/v1/ai/ideogram-image-edit"
+SEEDREAM_EDIT_PATH = "/v1/ai/text-to-image/seedream-v4-5-edit"
 
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELED", "CANCELLED", "ERROR"}
 SUCCESS_STATUS = "COMPLETED"
@@ -181,6 +186,43 @@ class FreepikImageClient:
         }
         if reference_images:
             body["reference_images"] = [r.to_payload() for r in reference_images]
+        try:
+            resp = await self._client.post(url, json=body)
+        except httpx.HTTPError as exc:
+            raise TransientError(f"Network error: {exc}") from exc
+        if resp.status_code >= 400:
+            raise _classify_http_error(resp.status_code, resp.text)
+        data = resp.json()
+        task_id = (data.get("data") or {}).get("task_id")
+        if not isinstance(task_id, str):
+            raise GenerationError(f"Tidak ada task_id pada response: {data}")
+        return task_id
+
+    async def create_seedream_edit_task(
+        self,
+        *,
+        prompt: str,
+        reference_images_b64_or_url: list[str],
+        aspect_ratio: str = "traditional_3_4",
+        seed: int | None = None,
+    ) -> str:
+        """Submit a Seedream 4.5 image-edit task.
+
+        ``reference_images_b64_or_url`` accepts either base64 strings or
+        publicly accessible URLs (1-5 entries). The first entry is treated
+        by the model as the master scene whose subject details, lighting,
+        and color tone are preserved.
+        """
+        if not 1 <= len(reference_images_b64_or_url) <= 5:
+            raise ValueError("Seedream edit requires 1-5 reference images")
+        url = f"{self._base_url}{SEEDREAM_EDIT_PATH}"
+        body: dict[str, Any] = {
+            "prompt": prompt,
+            "reference_images": list(reference_images_b64_or_url),
+            "aspect_ratio": aspect_ratio,
+        }
+        if seed is not None:
+            body["seed"] = int(seed)
         try:
             resp = await self._client.post(url, json=body)
         except httpx.HTTPError as exc:

@@ -81,6 +81,24 @@ COLLAGE_TARGET_HEIGHT = 1024
 COLLAGE_BG = (250, 248, 244)
 
 
+# Map the user-facing ratio choice (1:1, 3:4, 4:3, 16:9, 9:16) to the
+# enum values accepted by the Seedream 4.5 Edit endpoint. Any ratio not
+# in this map falls back to ``traditional_3_4`` (the master images'
+# native aspect).
+SEEDREAM_RATIO_MAP: dict[str, str] = {
+    "1:1": "square_1_1",
+    "3:4": "traditional_3_4",
+    "4:3": "classic_4_3",
+    "16:9": "widescreen_16_9",
+    "9:16": "social_story_9_16",
+}
+
+
+def to_seedream_ratio(ratio: str) -> str:
+    """Translate a user ratio string to Seedream's enum value."""
+    return SEEDREAM_RATIO_MAP.get(ratio, "traditional_3_4")
+
+
 def load_asset_bytes(name: str) -> bytes:
     """Read one of the bundled reference JPGs as raw bytes."""
     return resources.files(ASSET_PACKAGE).joinpath(name).read_bytes()
